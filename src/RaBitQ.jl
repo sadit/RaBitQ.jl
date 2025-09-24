@@ -1,5 +1,5 @@
 module RaBitQ
 
-# Write your package code here.
+include("rp.jl")
 
 end
