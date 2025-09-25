@@ -25,17 +25,24 @@ using SimilaritySearch
     end
 
     for (rptype, err) in [
-        QRRandomProjection => 30,
-        GaussianRandomProjection => 30,
-        Achioptas2RandomProjection => 30,
-        Achioptas3RandomProjection => 30
+        QRRandomProjection => 25,
+        GaussianRandomProjection => 25,
+        Achioptas2RandomProjection => 25,
+        Achioptas3RandomProjection => 25
     ]
-        @info rptype, err, 128
-        rp = rptype(Float32, dim, 128)
+
+        odim = 128
+        @info rptype, err, odim
+        rp = rptype(Float32, dim, odim) |> invertible
+        @show size(rp)
+
+        @test in_dim(rp) == dim
+        @test out_dim(rp) == odim
         x̂ = transform(rp, x)
         ŷ = transform(rp, y)
         d2 = evaluate(dist, x̂, ŷ)
         @test abs(d1 - d2) < err
+        @test evaluate(dist, invtransform(rp, x̂), x) < 18
     end
 
 end

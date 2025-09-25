@@ -20,9 +20,9 @@ getmap(rp::InvertibleRandomProjections) = rp.map
 
 function invertible(rp::RandomProjections)
     if in_dim(rp) == out_dim(rp)
-        InvertibleRandomProjections(rp.map, permutedims(inv(rp.map)))
+        InvertibleRandomProjections(rp.map, inv(rp.map))
     else
-        InvertibleRandomProjections(rp.map, perutedims(pinv(rp.map)))
+        InvertibleRandomProjections(rp.map, pinv(rp.map))
     end
 end
 
@@ -40,7 +40,7 @@ end
 
 function QRRandomProjection(FloatType, in_dim::Int, out_dim::Int=in_dim; seed::Int=0)
     rng = Xoshiro(seed)
-    M, _ = qr(rand(rng, FloatType, (in_dim, in_dim)))
+    M, _ = qr(rand(rng, FloatType, (in_dim, out_dim)))
     M = Matrix(M)
 
     if in_dim != out_dim
@@ -52,7 +52,7 @@ end
 
 function Achioptas2RandomProjection(FloatType, in_dim::Int, out_dim::Int=in_dim; seed::Int=0)
     rng = Xoshiro(seed)
-    M = Matrix{FloatType}(undef, in_dim, in_dim)
+    M = Matrix{FloatType}(undef, in_dim, out_dim)
 
     v = FloatType(sqrt(1 / out_dim))
 
@@ -69,7 +69,7 @@ end
 
 function Achioptas3RandomProjection(FloatType, in_dim::Int, out_dim::Int=in_dim; seed::Int=0)
     rng = Xoshiro(seed)
-    M = Matrix{FloatType}(undef, in_dim, in_dim)
+    M = Matrix{FloatType}(undef, in_dim, out_dim)
 
     v = FloatType(sqrt(3 / out_dim))
 
@@ -123,11 +123,18 @@ end
 
 function invtransform!(rp::InvertibleRandomProjections, out::AbstractVector, v::AbstractVector)
     #@assert out_dir(rp) == length(out) && in_dir(rp) == length(v)
-    mul!(out, rp.inv, v)
+    @show size(out) size(rp.inv) size(v)
+    #mul!(out, rp.inv, v)
+
+    for (i, x) in enumerate(eachcol(rp.inv))
+        @inbounds out[i] = dot(x, v)
+    end
+
+    out
 end
 
 function invtransform(rp::InvertibleRandomProjections, v::AbstractVector)
-    out = Vector{eltype(rp)}(undef, out_dim(rp))
+    out = Vector{eltype(rp)}(undef, in_dim(rp))
     invtransform!(rp, out, v)
 end
 
@@ -143,7 +150,7 @@ function invtransform!(rp::InvertibleRandomProjections, O::AbstractMatrix, X::Ab
 end
 
 function invtransform(rp::InvertibleRandomProjections, X::AbstractMatrix)
-    O = Matrix{eltype(rp)}(undef, out_dim(rp), size(X, 2))
+    O = Matrix{eltype(rp)}(undef, in_dim(rp), size(X, 2))
     invtransform!(rp, O, X)
 end
 
