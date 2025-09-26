@@ -5,7 +5,6 @@ export out_dim, in_dim, transform, transform!, invtransform, invtransform!
 
 abstract type AbstractRandomProjections end
 
-
 struct RandomProjections{M<:AbstractMatrix} <: AbstractRandomProjections
     map::M
 end
@@ -93,7 +92,7 @@ Base.eltype(rp::AbstractRandomProjections) = eltype(getmap(rp))
 
 function transform!(rp::AbstractRandomProjections, out::AbstractVector, v::AbstractVector)
     for (i, x) in enumerate(eachcol(getmap(rp)))
-        @inbounds out[i] = dot(x, v)
+        @inbounds out[i] = dot32(x, v)
     end
 
     out
@@ -127,7 +126,7 @@ function invtransform!(rp::InvertibleRandomProjections, out::AbstractVector, v::
     #mul!(out, rp.inv, v)
 
     for (i, x) in enumerate(eachcol(rp.inv))
-        @inbounds out[i] = dot(x, v)
+        @inbounds out[i] = dot32(x, v)
     end
 
     out
