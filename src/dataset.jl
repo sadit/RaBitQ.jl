@@ -1,8 +1,13 @@
 # dataset and distances
 #
 
-struct RaBitQCosineDistance <: SemiMetric end
-struct RaBitQL2Distance <: SemiMetric end
+struct RaBitQCosineDistance <: SemiMetric
+    Q::BitQuantizer
+end
+
+struct RaBitQL2Distance <: SemiMetric
+    Q::BitQuantizer
+end
 
 struct RaBitQDatabase <: AbstractDatabase
     data::Matrix{UInt64}
@@ -58,3 +63,14 @@ end
 
 Base.getindex(db::RaBitQDatabase, i::Integer) = RaBitQVector(view(db.data, :, i), db.dot_o_ō[i], db.l2_oraw_c[i])
 
+function SimilaritySearch.evaluate(dist::RaBitQCosineDistance, a::RaBitQVector, b::AbstractVector{<:Number})
+    rabitq_estimate_dot(dist.Q, a.x_b, a.dot_o_ō, b)
+end
+
+SimilaritySearch.evaluate(dist::RaBitQCosineDistance, a::AbstractVector, b::RaBitQVector) = evaluate(dist, b, a)
+
+function SimilaritySearch.evaluate(dist::RaBitQL2Distance, a::RaBitQVector, b::AbstractVector{<:Number})
+    rabitq_estimate_l2(dist.Q, a.x_b, a.dot_o_ō, a.l2_oraw_c, b)
+end
+
+SimilaritySearch.evaluate(dist::RaBitQL2Distance, a::AbstractVector, b::RaBitQVector) = evaluate(dist, b, a)

@@ -89,3 +89,5 @@ end
     @show rabitq_estimate_l2(Q, x_b, dot_o_ō_, l2_oraw_c_, qraw, norm(qraw))
 
 end
+
+@testset "RaBitQ Database" begin end
