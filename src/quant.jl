@@ -14,9 +14,9 @@ end
     nothing
 end
 
-struct BitQuantizer
+struct BitQuantizer{IQ<:InvertibleRandomProjections}
     m::Float32 # 1/sqrt(dim)
-    rp::InvertibleRandomProjections
+    rp::IQ
     c::Vector{Float32}
 end
 
@@ -25,32 +25,6 @@ in_dim(Q::BitQuantizer) = in_dim(Q.rp)
 dim64(Q::BitQuantizer) = ceil(Int, in_dim(Q) / 64)
 
 
-function rabitq_dot_with_bitencoded_vector(x_b::AbstractVector{UInt64}, p::AbstractVector{Float32}, m::Float32)::Float32
-    d = 0.0f0
-
-    @inbounds @fastmath @simd for i in eachindex(p)
-        p_i = m * p[i]
-        d += ifelse(_b64get(x_b, i), p_i, -p_i)
-    end
-
-    d
-end
-
-function rabitq_dot(Q::BitQuantizer, x_b::AbstractVector{UInt64}, o::AbstractVector{<:AbstractFloat})
-    dim = in_dim(Q)
-    P = Q.rp.map
-    m = Q.m
-    d = 0.0f0
-
-    # this function do inline projection of x_b in P
-    @inbounds for i in 1:dim
-        p = view(P, :, i)
-        x_i = rabitq_dot_with_bitencoded_vector(x_b, p, m) # projection of x_b in the i-th column
-        d += x_i * Float32(o[i])
-    end
-
-    d
-end
 
 function rabitq_bitencode!(Q::BitQuantizer, x_b::AbstractVector{UInt64}, o::AbstractVector{<:AbstractFloat})
     Pinv = Q.rp.inv
@@ -69,11 +43,38 @@ function rabitq_bitencode!(Q::BitQuantizer, x_b::AbstractVector{UInt64}, o::Abst
     x_b
 end
 
-function rabitq_estimate_dot(Q::BitQuantizer, x_b::AbstractVector{UInt64}, dot_oō::Float32, q::AbstractVector{<:AbstractFloat})
+function rabitq_dot_with_bitencoded_vector(x_b::AbstractVector{UInt64}, p::AbstractVector{Float32}, m::Float32)::Float32
+    d = 0.0f0
+
+    @inbounds @simd for i in eachindex(p)
+        p_i = m * p[i]
+        d += ifelse(_b64get(x_b, i), p_i, -p_i)
+    end
+
+    d
+end
+
+function rabitq_dot(Q::BitQuantizer, x_b::AbstractVector{UInt64}, o::AbstractVector{<:AbstractFloat})::Float32
+    dim = in_dim(Q)
+    P = Q.rp.map
+    m = Q.m
+    d = 0.0f0
+
+    # this function do inline projection of x_b in P
+    @inbounds for i in 1:dim
+        p = view(P, :, i)
+        x_i = rabitq_dot_with_bitencoded_vector(x_b, p, m) # projection of x_b in the i-th column
+        d += x_i * Float32(o[i])
+    end
+
+    d
+end
+
+function rabitq_estimate_dot(Q::BitQuantizer, x_b::AbstractVector{UInt64}, dot_oō::Float32, q::AbstractVector{<:AbstractFloat})::Float32
     rabitq_dot(Q, x_b, q) / dot_oō
 end
 
-
+#=
 function rabitq_l2_with_encoded(Q::BitQuantizer, x_b::AbstractVector{UInt64}, o::AbstractVector{<:AbstractFloat})
     d = 0.0f0
     m = Q.m
@@ -90,7 +91,7 @@ function rabitq_l2_with_encoded(Q::BitQuantizer, x_b::AbstractVector{UInt64}, o:
     end
 
     sqrt(d)
-end
+end=#
 
 function rabitq_estimate_l2(Q::BitQuantizer, x_b::AbstractVector{UInt64}, dot_o_ō::Float32, l2_oraw_c::Float32, qraw::AbstractVector{<:AbstractFloat}, norm::Float32)
     l2_qraw_c = evaluate(L2_asf32(), Q.c, qraw)

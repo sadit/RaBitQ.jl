@@ -1,15 +1,17 @@
 # dataset and distances
 #
+export RaBitQDatabase, RaBitQCosineDistance, RaBitQL2Distance, RaBitQVector
 
-struct RaBitQCosineDistance <: SemiMetric
-    Q::BitQuantizer
+struct RaBitQCosineDistance{BQ<:BitQuantizer} <: SemiMetric
+    Q::BQ
 end
 
-struct RaBitQL2Distance <: SemiMetric
-    Q::BitQuantizer
+struct RaBitQL2Distance{BQ<:BitQuantizer} <: SemiMetric
+    Q::BQ
 end
 
-struct RaBitQDatabase <: AbstractDatabase
+struct RaBitQDatabase{BQ<:BitQuantizer} <: AbstractDatabase
+    Q::BQ
     data::Matrix{UInt64}
     dot_o_ō::Vector{Float32}
     l2_oraw_c::Vector{Float32}
@@ -21,7 +23,7 @@ function RaBitQDatabase(db::Matrix{<:Number};
     normalize::Bool=false || center)
     n = size(db, 2)
     Q = BitQuantizer(size(db, 1))
-    if !centered
+    if center
         sample_centroid = sample_centroid < 2 ? ceil(Int, sqrt(n)) : sample_centroid
         p = Float32(1 / sample_centroid)
         c = Q.c
@@ -34,11 +36,15 @@ function RaBitQDatabase(db::Matrix{<:Number};
         end
     end
 
-    data = Matrix{UInt64}(undef, dim64(Q))
-    dot_o_ō = zeros(n)
-    l2_oraw_c = zeros(n)
+    data = Matrix{UInt64}(undef, dim64(Q), n)
+    dot_o_ō = zeros(Float32, n)
+    l2_oraw_c = zeros(Float32, n)
     dist = L2_asf32()
-    for (i, x_b, o) in zip(1:n, eachcol(data), eachcol(db))
+    c = Q.c
+
+    @batch minbatch = 4 per = thread for i in 1:n
+        x_b = view(data, :, i)
+        o = view(db, :, i)
         l2_oraw_c[i] = evaluate(dist, o, c)
         center && (o .= o .- c)
         normalize && normalize!(o)
@@ -46,7 +52,7 @@ function RaBitQDatabase(db::Matrix{<:Number};
         dot_o_ō[i] = rabitq_dot(Q, x_b, o)
     end
 
-    RaBitQDatabase(data, dot_o_ō, l2_oraw_c)
+    RaBitQDatabase(Q, data, dot_o_ō, l2_oraw_c)
 end
 
 @inline Base.eltype(db::RaBitQDatabase) = typeof(db[1])
@@ -64,7 +70,7 @@ end
 Base.getindex(db::RaBitQDatabase, i::Integer) = RaBitQVector(view(db.data, :, i), db.dot_o_ō[i], db.l2_oraw_c[i])
 
 function SimilaritySearch.evaluate(dist::RaBitQCosineDistance, a::RaBitQVector, b::AbstractVector{<:Number})
-    rabitq_estimate_dot(dist.Q, a.x_b, a.dot_o_ō, b)
+    1.0f0 - rabitq_estimate_dot(dist.Q, a.x_b, a.dot_o_ō, b)
 end
 
 SimilaritySearch.evaluate(dist::RaBitQCosineDistance, a::AbstractVector, b::RaBitQVector) = evaluate(dist, b, a)

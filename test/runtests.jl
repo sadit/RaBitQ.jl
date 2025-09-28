@@ -1,7 +1,6 @@
 using RaBitQ
 using Test
-using LinearAlgebra
-using SimilaritySearch
+using AllocCheck, LinearAlgebra, SimilaritySearch
 
 @testset "Random Projections" begin
     dim = 384
@@ -79,6 +78,18 @@ end
     @show x_b
     dot_o_ō_ = rabitq_dot(Q, x_b, o)
     @test abs(dot_o_ō - dot_o_ō_) < 1e-4
+    @check_allocs function run()
+        a = rabitq_estimate_dot(Q, x_b, dot_o_ō_, q)
+        b = rabitq_estimate_dot(Q, x_b, dot_o_ō_, q)
+        a, b
+    end
+    try
+        @show run()
+    catch err
+        for e in err.errors
+            display(e)
+        end
+    end
     est_ = rabitq_estimate_dot(Q, x_b, dot_o_ō_, q)
     @show dot_o_q, est, est_
     @test abs(est - est_) < 1e-4
@@ -90,4 +101,29 @@ end
 
 end
 
-@testset "RaBitQ Database" begin end
+function generate(n, dim)
+    X = rand((-1.0f0, 1.0f0), dim, n)
+    for c in eachcol(X)
+        normalize!(c)
+    end
+
+    X
+end
+
+@testset "RaBitQ Database" begin
+    dim = 384
+    k = 16
+    X = generate(2^12, dim)
+    Q = generate(128, dim)
+
+    @time db = RaBitQDatabase(X)
+
+    G = ExhaustiveSearch(; db=MatrixDatabase(X), dist=CosineDistance())
+    ctx = getcontext(G)
+    @time "computing gold" gold_knns = searchbatch(G, ctx, MatrixDatabase(Q), k)
+    S = ExhaustiveSearch(; db, dist=RaBitQCosineDistance(db.Q))
+    @time "computing knns" knns = searchbatch(S, ctx, MatrixDatabase(Q), k)
+    @show macrorecall(gold_knns, knns)
+
+end
+
