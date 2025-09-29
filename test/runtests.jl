@@ -123,7 +123,23 @@ end
     @time "computing gold" gold_knns = searchbatch(G, ctx, MatrixDatabase(Q), k)
     S = ExhaustiveSearch(; db, dist=RaBitQCosineDistance(db.Q))
     @time "computing knns" knns = searchbatch(S, ctx, MatrixDatabase(Q), k)
-    @show macrorecall(gold_knns, knns)
+    @test macrorecall(gold_knns, knns) > 0.25
 
+end
+
+@testset "RaBitQ ReRanking" begin
+    dim = 384
+    k = 16
+    X = generate(2^12, dim)
+    Q = generate(128, dim)
+
+    @time db = RaBitQDatabase(X)
+
+    G = ExhaustiveSearch(; db=MatrixDatabase(X), dist=CosineDistance())
+    ctx = getcontext(G)
+    @time "computing gold" gold_knns = searchbatch(G, ctx, MatrixDatabase(Q), k)
+    S = ExhaustiveSearch(; db, dist=RaBitQCosineDistance(db.Q))
+    @time "computing knns" knns = searchbatch(S, ctx, MatrixDatabase(Q), k)
+    @show macrorecall(gold_knns, knns)
 end
 

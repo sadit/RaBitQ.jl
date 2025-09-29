@@ -39,19 +39,9 @@ function RaBitQDatabase(db::Matrix{<:Number};
     data = Matrix{UInt64}(undef, dim64(Q), n)
     dot_o_ō = zeros(Float32, n)
     l2_oraw_c = zeros(Float32, n)
-    dist = L2_asf32()
     c = Q.c
 
-    @batch minbatch = 4 per = thread for i in 1:n
-        x_b = view(data, :, i)
-        o = view(db, :, i)
-        l2_oraw_c[i] = evaluate(dist, o, c)
-        center && (o .= o .- c)
-        normalize && normalize!(o)
-        rabitq_bitencode!(Q, x_b, o)
-        dot_o_ō[i] = rabitq_dot(Q, x_b, o)
-    end
-
+    rabitq_bitencode!(Q, data, dot_o_ō, l2_oraw_c, Q.c, db; center, normalize)
     RaBitQDatabase(Q, data, dot_o_ō, l2_oraw_c)
 end
 
@@ -80,3 +70,4 @@ function SimilaritySearch.evaluate(dist::RaBitQL2Distance, a::RaBitQVector, b::A
 end
 
 SimilaritySearch.evaluate(dist::RaBitQL2Distance, a::AbstractVector, b::RaBitQVector) = evaluate(dist, b, a)
+

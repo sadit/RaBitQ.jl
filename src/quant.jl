@@ -24,8 +24,6 @@ BitQuantizer(dim::Int) = BitQuantizer(Float32(1 / sqrt(dim)), invertible(QRRando
 in_dim(Q::BitQuantizer) = in_dim(Q.rp)
 dim64(Q::BitQuantizer) = ceil(Int, in_dim(Q) / 64)
 
-
-
 function rabitq_bitencode!(Q::BitQuantizer, x_b::AbstractVector{UInt64}, o::AbstractVector{<:AbstractFloat})
     Pinv = Q.rp.inv
     dim = in_dim(Q)
@@ -41,6 +39,40 @@ function rabitq_bitencode!(Q::BitQuantizer, x_b::AbstractVector{UInt64}, o::Abst
     end
 
     x_b
+end
+
+function rabitq_bitencode_queries!(Q::BitQuantizer, data::Matrix{UInt64}, c::AbstractVector, db::Matrix{<:Number};
+    center::Bool, normalize::Bool)
+    n = size(data, 2)
+    dist = L2_asf32()
+
+    @batch minbatch = 4 per = thread for i in 1:n
+        x_b = view(data, :, i)
+        o = view(db, :, i)
+        l2_oraw_c[i] = evaluate(dist, o, c)
+        center && (o .= o .- c)
+        normalize && normalize!(o)
+        rabitq_bitencode!(Q, x_b, o)
+        dot_o_ō[i] = rabitq_dot(Q, x_b, o)
+    end
+
+end
+
+function rabitq_bitencode!(Q::BitQuantizer, data::Matrix{UInt64}, dot_o_ō::Vector{Float32}, l2_oraw_c::Vector{Float32}, c::AbstractVector, db::Matrix{<:Number};
+    center::Bool, normalize::Bool)
+    n = size(data, 2)
+    dist = L2_asf32()
+
+    @batch minbatch = 4 per = thread for i in 1:n
+        x_b = view(data, :, i)
+        o = view(db, :, i)
+        l2_oraw_c[i] = evaluate(dist, o, c)
+        center && (o .= o .- c)
+        normalize && normalize!(o)
+        rabitq_bitencode!(Q, x_b, o)
+        dot_o_ō[i] = rabitq_dot(Q, x_b, o)
+    end
+
 end
 
 function rabitq_dot_with_bitencoded_vector(x_b::AbstractVector{UInt64}, p::AbstractVector{Float32}, m::Float32)::Float32
@@ -98,5 +130,4 @@ function rabitq_estimate_l2(Q::BitQuantizer, x_b::AbstractVector{UInt64}, dot_o_
     est_o_q = rabitq_estimate_dot(Q, x_b, dot_o_ō, qraw) / norm
     sqrt(l2_oraw_c^2 + l2_qraw_c^2 - 2 * l2_oraw_c * l2_qraw_c * est_o_q)
 end
-
 
