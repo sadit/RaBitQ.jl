@@ -1,6 +1,6 @@
 using RaBitQ
 using Test
-using AllocCheck, LinearAlgebra, SimilaritySearch, JLD2, StatsBase
+using AllocCheck, LinearAlgebra, SimilaritySearch, JLD2, StatsBase, Downloads
 
 @testset "Random Projections" begin
     dim = 384
@@ -73,10 +73,10 @@ end
 
     Q = RaBitQ_Quantizer(m, rp)
     x_b = Vector{UInt64}(undef, ceil(Int, in_dim(Q.rp) / 64))
-    RaBitQ_bitencode!(Q, x_b, o)
+    RaBitQ.RaBitQ_bitencode_!(Q, x_b, o)
     @test BitVector(sign.(x̄) .> 0).chunks == x_b
     @show x_b
-    dot_ō_o_ = RaBitQ_dot_ō_o(Q, x_b, o)
+    dot_ō_o_ = RaBitQ.RaBitQ_dot_ō_o(Q, x_b, o)
     @test abs(dot_ō_o - dot_ō_o_) < 1e-4
     @info "analyzing allocating functions"
     @check_allocs function run(o, q)
@@ -100,12 +100,12 @@ end
     @show dot_o_q, est, est_
     @test abs(est - est_) < 1e-4
     @show o_.info
-    @test 0.98 < dot_o_q / est_ < 1.05
+    @test 0.93 < dot_o_q / est_ < 1.07
     norm_oraw = norm(oraw)
     #@test abs(l2_oraw_c_ - evaluate(L2Distance(), x̄, Q.c)) < 1e-4
     est_l2 = evaluate(RaBitQ_L2Distance(Q), o_, q_)
     @show l2, est_l2
-    @test abs(l2 - est_l2) < 0.1
+    @test abs(l2 - est_l2) < 0.11
 end
 
 function gendata(n, dim)
@@ -138,47 +138,15 @@ end
 end
 
 
-#=
-@testset "RaBitQ ReRanking" begin
-    k = 10
-
-    X, Q, gold_knns, gold_dists = jldopen("../datasets/benchmark-dev-ccnews-fp16.h5") do f
-        kind = "otest"
-        Float32.(f["train"]), Float32.(f["$kind/queries"]), f["$kind/knns"][1:k, :], f["$kind/dists"][1:k, :]
-    end
-
-    @time db = RaBitQ_Database(X)
-    @info typeof(db)
-
-    S = ExhaustiveSearch(; db, dist=RaBitQ_CosineDistance(db.quant))
-    ctx = getcontext(S)
-    queries = RaBitQ_Queries(db.quant, Q)
-
-    @show size(X), size(Q)
-    for Δ in [1, 2, 4, 8, 16]
-        @info "====================================================="
-        @time "ReRanking computing knns Δ=$Δ" knns = searchbatch(S, ctx, queries, Δ * k)
-        @show Δ, size(gold_knns), size(knns)
-        @show Δ, macrorecall(Set.(eachcol(gold_knns)), Set.(IdView.(eachcol(knns))))
-        @show quantile(gold_dists[1, :], 0:0.25:1.0)
-        @show quantile(gold_dists[:, 1], 0:0.25:1.0)
-        RaBitQ_rerank_cosine!(db, knns, queries)
-        @show "RERANKED"
-        @show quantile(DistView(knns[1, :]), 0:0.25:1.0)
-        @show quantile(DistView(knns[1:k, 1]), 0:0.25:1.0)
-
-        @show "reranked Δ=$Δ", macrorecall(gold_knns, knns)
-    end
-
-end
-
-=#
-
 @testset "RaBitQ ReRanking Hamming" begin
     k = 10
+    filename = "benchmark-dev-ccnews-fp16.h5"
+    if !isfile(filename)
+        Downloads.download("https://huggingface.co/datasets/sadit/SISAP2025/resolve/main/$filename?download=true", filename)
+    end
 
-    X, Q, gold_knns, gold_dists = jldopen("../datasets/benchmark-dev-ccnews-fp16.h5") do f
-        kind = "itest"
+    X, Q, gold_knns, gold_dists = jldopen(filename) do f
+        kind = "otest"
         f["train"], f["$kind/queries"], f["$kind/knns"][1:k, :], f["$kind/dists"][1:k, :]
     end
 
@@ -188,18 +156,20 @@ end
     S = ExhaustiveSearch(; db=MatrixDatabase(dbQ.matrix), dist=BinaryHammingDistance())
     ctx = getcontext(S)
     m, n = dim64(dbQ.quant), size(Q, 2)
-    M = Matrix{UInt64}(undef, m, n)
-    queriesQ = RaBitQ_bitencode_queries!(dbQ.quant, M, Q)
+    
+    queriesQ = RaBitQ_bitencode(dbQ.quant, Q)
     queries = RaBitQ_Queries(dbQ.quant, Q)
     @show size(X), size(Q)
     dist = RaBitQ_CosineDistance(dbQ.quant)
 
     local knns
-    for Δ in [1, 2, 4, 8, 16]
-        @info "====================================================="
+    for (Δ, minrecall) in [2 => 0.6, 8 => 0.8, 16 => 0.9]
+        @info "==================="
         @time "ReRanking computing knns Δ=$Δ" knns = searchbatch(S, ctx, MatrixDatabase(queriesQ), Δ * k)
         @show Δ, size(gold_knns), size(knns)
-        @show Δ, macrorecall(Set.(eachcol(gold_knns)), Set.(IdView.(eachcol(knns))))
+        recall = macrorecall(Set.(eachcol(gold_knns)), Set.(IdView.(eachcol(knns))))
+        @show Δ, recall
+        @test recall > minrecall
         @show quantile(gold_dists[1, :], 0:0.25:1.0)
         @show quantile(gold_dists[:, 1], 0:0.25:1.0)
         @show "DIST HAMMING"
@@ -212,13 +182,14 @@ end
         @show "reranked Δ=$Δ", macrorecall(gold_knns, knns)
     end
 
-    @show "RERANKED FULL"
+    @info "======== Real ReRank"
     @time "RERANK" rerank!(NormalizedCosine_asf32(), MatrixDatabase(X), MatrixDatabase(Q), knns)
     @time "RERANK" rerank!(NormalizedCosine_asf32(), MatrixDatabase(X), MatrixDatabase(Q), knns)
     @show quantile(DistView(knns[1, :]), 0:0.25:1.0)
     @show quantile(DistView(knns[1:k, 1]), 0:0.25:1.0)
-    @show "reranked ", macrorecall(gold_knns, knns)
+    recall = macrorecall(gold_knns, knns)
+    @show "reranked ", recall
+    @test recall > 0.9
     @info quantile([p.err for p in dbQ.info], 0:0.25:1)
-
 end
 

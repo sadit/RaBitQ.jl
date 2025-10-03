@@ -1,8 +1,9 @@
 module RaBitQ
 using LinearAlgebra
 using SimilaritySearch
-export RaBitQ_Quantizer, RaBitQ_bitencode!, RaBitQ_bitencode_queries!, RaBitQ_dot_ō_o, RaBitQ_dot_ō_qinv, RaBitQ_estimate_dot, dim64, RaBitQ_estimate_l2
+export RaBitQ_Quantizer, RaBitQ_estimate_dot, RaBitQ_estimate_l2
 export RaBitQ_Database, RaBitQ_Vector, RaBitQ_VectorInfo, RaBitQ_Queries, RaBitQ_QueryVector, RaBitQ_CosineDistance, RaBitQ_L2Distance, RaBitQ_rerank_cosine!
+export RaBitQ_bitencode!, RaBitQ_bitencode, dim64
 
 function dot32(p::AbstractVector{<:AbstractFloat}, o::AbstractVector{<:AbstractFloat})
     d = 0.0f0
@@ -82,7 +83,7 @@ function RaBitQ_Database(db::Matrix{<:Number})
     matrix = Matrix{UInt64}(undef, dim64(quant), n)
     info = Vector{RaBitQ_VectorInfo}(undef, n)
 
-    RaBitQ_bitencode!(quant, matrix, db, info)
+    RaBitQ_bitencode_matrix!(quant, matrix, db, info)
     RaBitQ_Database(quant, matrix, info)
 end
 
@@ -124,7 +125,7 @@ end
 
 Base.getindex(db::RaBitQ_Database, i::Integer) = RaBitQ_Vector(view(db.matrix, :, i), db.info[i])
 
-function RaBitQ_bitencode!(Q::RaBitQ_Quantizer, x_b::AbstractVector{UInt64}, o::AbstractVector{<:AbstractFloat})
+function RaBitQ_bitencode_!(Q::RaBitQ_Quantizer, x_b::AbstractVector{UInt64}, o::AbstractVector{<:AbstractFloat})
     Pinv = Q.rp.inv
     dim = in_dim(Q)
     fill!(x_b, zero(UInt64))
@@ -141,28 +142,22 @@ function RaBitQ_bitencode!(Q::RaBitQ_Quantizer, x_b::AbstractVector{UInt64}, o::
     x_b
 end
 
-function RaBitQ_bitencode_queries!(
-    Q::RaBitQ_Quantizer,
-    matrix::Matrix{UInt64},
-    db::Matrix{<:Number}
-)
-    n = size(matrix, 2)
 
-    @batch minbatch = 4 per = thread for i in 1:n
-        x_b = view(matrix, :, i)
-        oraw = view(db, :, i)
-        RaBitQ_bitencode!(Q, x_b, oraw)
-    end
-
-    matrix
-end
-
-function RaBitQ_bitencode!(
+"""
+RaBitQ_bitencode_matrix!(
     Q::RaBitQ_Quantizer,
     matrix::Matrix{UInt64},
     db::Matrix{<:Number},
-    info::Vector{RaBitQ_VectorInfo}
-)
+    info::Vector{RaBitQ_VectorInfo})
+
+Internal function that transform dataset and computes all related information for RaBitQ_Database
+"""
+function RaBitQ_bitencode_matrix!(
+    Q::RaBitQ_Quantizer,
+    matrix::Matrix{UInt64},
+    db::Matrix{<:Number},
+    info::Vector{RaBitQ_VectorInfo})
+
     err_factor = Float32(1.9 / sqrt(in_dim(Q)-1))
     n = size(matrix, 2)
     
@@ -170,13 +165,46 @@ function RaBitQ_bitencode!(
         x_b = view(matrix, :, i)
         oraw = view(db, :, i)
         N = norm32(oraw)
-        RaBitQ_bitencode!(Q, x_b, oraw)
+        RaBitQ_bitencode_!(Q, x_b, oraw)
         dot_ō_o = RaBitQ_dot_ō_o(Q, x_b, oraw) / N
         x = dot_ō_o^2
         err = sqrt((1f0 - x) / x)  * err_factor  # sim. RaBitQ_dot_confidence_interval
         info[i] = RaBitQ_VectorInfo(dot_ō_o, N, err)
     end
 end
+
+"""
+    RaBitQ_bitencode!(
+        Q::RaBitQ_Quantizer,
+        matrix::Matrix{UInt64},
+        db::Matrix{<:Number})
+    
+Computes a binary sketches projecting `db` to a Binary Hamming space storing binary sketches into `matrix` 
+"""
+function RaBitQ_bitencode!(
+    Q::RaBitQ_Quantizer,
+    matrix::Matrix{UInt64},
+    db::Matrix{<:Number})
+    n = size(matrix, 2)
+
+    @batch minbatch = 4 per = thread for i in 1:n
+        x_b = view(matrix, :, i)
+        oraw = view(db, :, i)
+        RaBitQ_bitencode_!(Q, x_b, oraw)
+    end
+
+    matrix
+end
+
+function RaBitQ_bitencode(
+    Q::RaBitQ_Quantizer,
+    db::Matrix{<:Number})
+    n = size(db, 2)
+    matrix = Matrix{UInt64}(undef, dim64(Q), n)
+
+    RaBitQ_bitencode!(Q, matrix, db)
+end
+
 
 function RaBitQ_dot_confidence_interval(dot_ō_o, D)
     x = dot_ō_o^2
