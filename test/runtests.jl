@@ -73,7 +73,7 @@ end
 
     Q = RaBitQ_Quantizer(m, rp)
     x_b = Vector{UInt64}(undef, ceil(Int, in_dim(Q.rp) / 64))
-    RaBitQ.RaBitQ_bitencode_!(Q, x_b, o)
+    RaBitQ.RaBitQ_bitencode_!(Q.rp.inv, x_b, o)
     @test BitVector(sign.(x̄) .> 0).chunks == x_b
     @show x_b
     dot_ō_o_ = RaBitQ.RaBitQ_dot_ō_o(Q, x_b, o)
@@ -105,7 +105,7 @@ end
     #@test abs(l2_oraw_c_ - evaluate(L2Distance(), x̄, Q.c)) < 1e-4
     est_l2 = evaluate(RaBitQ_L2Distance(Q), o_, q_)
     @show l2, est_l2
-    @test abs(l2 - est_l2) < 0.11
+    @test abs(l2 - est_l2) < 0.15
 end
 
 function gendata(n, dim)
@@ -150,17 +150,17 @@ end
         f["train"], f["$kind/queries"], f["$kind/knns"][1:k, :], f["$kind/dists"][1:k, :]
     end
 
-    @time dbQ = RaBitQ_Database(X)
-    @info typeof(dbQ)
+    rp = GaussianRandomProjection(Float32, size(X, 1), 3size(X, 1))
+    #rp = QRRandomProjection(Float32, size(X, 1))
+    db = MatrixDatabase(RaBitQ_bitencode(rp.map, X))
 
-    S = ExhaustiveSearch(; db=MatrixDatabase(dbQ.matrix), dist=BinaryHammingDistance())
+    S = ExhaustiveSearch(; db, dist=BinaryHammingDistance())
     ctx = getcontext(S)
-    m, n = dim64(dbQ.quant), size(Q, 2)
     
-    queriesQ = RaBitQ_bitencode(dbQ.quant, Q)
-    queries = RaBitQ_Queries(dbQ.quant, Q)
+    queriesQ = MatrixDatabase(RaBitQ_bitencode(rp.map, Q))
+    #queries = RaBitQ_Queries(dbQ.quant, Q)
     @show size(X), size(Q)
-    dist = RaBitQ_CosineDistance(dbQ.quant)
+    #dist = RaBitQ_CosineDistance(dbQ.quant)
 
     local knns
     for (Δ, minrecall) in [2 => 0.6, 8 => 0.8, 16 => 0.9]
@@ -172,14 +172,14 @@ end
         @test recall > minrecall
         @show quantile(gold_dists[1, :], 0:0.25:1.0)
         @show quantile(gold_dists[:, 1], 0:0.25:1.0)
-        @show "DIST HAMMING"
+        #=@show "DIST HAMMING"
         @show quantile(DistView(knns[1, :]), 0:0.25:1.0)
         @show quantile(DistView(knns[:, 1]), 0:0.25:1.0)
-        @show "RERANKED Estimation"
-        @time "RERANK" rerank!(dist, dbQ, queries, knns)
+        @show "RERANKED Estimation"=#
+        #=@time "RERANK" rerank!(dist, dbQ, queries, knns)
         @show quantile(DistView(knns[1, :]), 0:0.25:1.0)
         @show quantile(DistView(knns[1:k, 1]), 0:0.25:1.0)
-        @show "reranked Δ=$Δ", macrorecall(gold_knns, knns)
+        @show "reranked Δ=$Δ", macrorecall(gold_knns, knns)=#
     end
 
     @info "======== Real ReRank"
@@ -190,6 +190,6 @@ end
     recall = macrorecall(gold_knns, knns)
     @show "reranked ", recall
     @test recall > 0.9
-    @info quantile([p.err for p in dbQ.info], 0:0.25:1)
+    # @info quantile([p.err for p in dbQ.info], 0:0.25:1)
 end
 

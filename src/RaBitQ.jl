@@ -125,14 +125,13 @@ end
 
 Base.getindex(db::RaBitQ_Database, i::Integer) = RaBitQ_Vector(view(db.matrix, :, i), db.info[i])
 
-function RaBitQ_bitencode_!(Q::RaBitQ_Quantizer, x_b::AbstractVector{UInt64}, o::AbstractVector{<:AbstractFloat})
-    Pinv = Q.rp.inv
-    dim = in_dim(Q)
+function RaBitQ_bitencode_!(P::Matrix, x_b::AbstractVector{UInt64}, o::AbstractVector{<:AbstractFloat})
+    dim = size(P, 2) # in_dim(Q)
     fill!(x_b, zero(UInt64))
 
     # this procedure performs an online inverse
     @inbounds for i in 1:dim
-        p = view(Pinv, :, i)
+        p = view(P, :, i)
         x_i = dot32(p, o)
         if x_i >= 0
             _b64set!(x_b, i)
@@ -165,7 +164,7 @@ function RaBitQ_bitencode_matrix!(
         x_b = view(matrix, :, i)
         oraw = view(db, :, i)
         N = norm32(oraw)
-        RaBitQ_bitencode_!(Q, x_b, oraw)
+        RaBitQ_bitencode_!(Q.rp.inv, x_b, oraw)
         dot_ō_o = RaBitQ_dot_ō_o(Q, x_b, oraw) / N
         x = dot_ō_o^2
         err = sqrt((1f0 - x) / x)  * err_factor  # sim. RaBitQ_dot_confidence_interval
@@ -175,14 +174,14 @@ end
 
 """
     RaBitQ_bitencode!(
-        Q::RaBitQ_Quantizer,
+        map::Matrix{Float32},
         matrix::Matrix{UInt64},
         db::Matrix{<:Number})
     
 Computes a binary sketches projecting `db` to a Binary Hamming space storing binary sketches into `matrix` 
 """
 function RaBitQ_bitencode!(
-    Q::RaBitQ_Quantizer,
+    map::Matrix{Float32},
     matrix::Matrix{UInt64},
     db::Matrix{<:Number})
     n = size(matrix, 2)
@@ -190,19 +189,20 @@ function RaBitQ_bitencode!(
     @batch minbatch = 4 per = thread for i in 1:n
         x_b = view(matrix, :, i)
         oraw = view(db, :, i)
-        RaBitQ_bitencode_!(Q, x_b, oraw)
+        RaBitQ_bitencode_!(map, x_b, oraw)
     end
 
     matrix
 end
 
 function RaBitQ_bitencode(
-    Q::RaBitQ_Quantizer,
+    map::Matrix{Float32},
     db::Matrix{<:Number})
     n = size(db, 2)
-    matrix = Matrix{UInt64}(undef, dim64(Q), n)
+    m = ceil(Int, size(map, 2) / 64)
+    matrix = Matrix{UInt64}(undef, m, n)
 
-    RaBitQ_bitencode!(Q, matrix, db)
+    RaBitQ_bitencode!(map, matrix, db)
 end
 
 
@@ -238,10 +238,8 @@ function RaBitQ_dot_ō_o(Q::RaBitQ_Quantizer, x_b::AbstractVector{UInt64}, o::A
     d
 end
 
-function RaBitQ_dot_ō_qinv(Q::RaBitQ_Quantizer, x_b::AbstractVector{UInt64}, qinv::AbstractVector)::Float32
+function RaBitQ_dot_ō_qinv(Q::RaBitQ_Quantizer, x_b::AbstractVector{UInt64}, qinv::AbstractVector{Float32})::Float32
     dim = in_dim(Q)
-    #Pinv = Q.rp.inv
-    # m = Q.m
     d = 0.0f0
 
     # this function do inline inv. projection of q in P^-1
@@ -249,7 +247,7 @@ function RaBitQ_dot_ō_qinv(Q::RaBitQ_Quantizer, x_b::AbstractVector{UInt64}, q
         #x_i = m * qinv[i]
         #d += ifelse(_b64get(x_b, i), x_i, -x_i)
         x_i = qinv[i]
-        d += ifelse(_b64get(x_b, i),x_i, -x_i)
+        d += ifelse(_b64get(x_b, i), x_i, -x_i)
     end
 
     d * Q.m
