@@ -156,6 +156,8 @@ end
     @test recall > 0.25
 end
 
+using InteractiveUtils
+
 
 @testset "RaBit DB real" begin
     k = 10
@@ -180,9 +182,10 @@ end
         @time "dist" evaluate(dist, x, q)
         @time "estimate" RaBitQ_estimate_dot(db.m, x, q)
         @time "estimate" RaBitQ_estimate_dot(db.m, x, q)
+        @code_warntype RaBitQ_estimate_dot(db.m, x, q)
+        @code_warntype RaBitQ.RaBitQ_dot_ō_qinv(db.m, x.x_b, q.qinv)
     end
-    @code_warntype RaBitQ_estimate_dot(db.m, x, q)
-    
+
     @time "ESTIMATION computing knns" knns = searchbatch!(S, ctx, queries, knns)
     @time "ESTIMATION computing knns" knns = searchbatch!(S, ctx, queries, knns)
     recall = macrorecall(gold_knns, knns)
