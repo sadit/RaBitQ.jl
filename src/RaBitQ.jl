@@ -48,7 +48,9 @@ end
 
 function _b64get(v::AbstractVector{UInt64}, i_::Int)::Bool
     p = b64indices(i_)
-    @inbounds (v[p.b] >>> p.i) & one(UInt64)
+    @inbounds b = v[p.b]
+    val = one(UInt64) << p.i
+    (v[p.b] & val) !== zero(UInt64)
 end
 
 function _b64set!(v::AbstractVector{UInt64}, i_::Int)
@@ -71,19 +73,19 @@ struct RaBitQ_Database <: AbstractDatabase
     P::Matrix{Float32}
     Pinv::Matrix{Float32}
     m::Float32
-    matrix::Matrix{UInt64}
+    sketches::Matrix{UInt64}
     info::Vector{RaBitQ_VectorInfo}
 end
 
 function RaBitQ_Database(X::Matrix{<:Number})
     dim, n = size(X)
-    matrix = Matrix{UInt64}(undef, dim64(dim), n)
+    sketches = Matrix{UInt64}(undef, dim64(dim), n)
     info = Vector{RaBitQ_VectorInfo}(undef, n)
     Q = invertible(QRRandomProjection(Float32, dim))
     m = Float32(1 / sqrt(dim))
 
-    RaBitQ_bitencode_matrix!(Q.map, Q.inv, m, matrix, X, info)
-    RaBitQ_Database(Q.map, Q.inv, m, matrix, info)
+    RaBitQ_bitencode_matrix!(Q.map, Q.inv, m, sketches, X, info)
+    RaBitQ_Database(Q.map, Q.inv, m, sketches, info)
 end
 
 in_dim(db::RaBitQ_Database) = in_dim(db.quant)
@@ -94,9 +96,10 @@ dim64(dim::Integer) = ceil(Int, dim / 64)
 @inline push_item!(db::RaBitQ_Database, v) = error("unsupported push!")
 @inline append_items!(a::RaBitQ_Database, b) = error("unsupported append!")
 @inline Base.length(db::RaBitQ_Database) = length(db.info)
+Base.getindex(db::RaBitQ_Database, i::Integer) = RaBitQ_Vector(view(db.sketches, :, i), db.info[i])
 
-struct RaBitQ_Queries{MATRIX<:AbstractMatrix{<:Number}} <: AbstractDatabase
-    Qinv::MATRIX
+struct RaBitQ_Queries <: AbstractDatabase
+    Qinv::Matrix{Float32}
     norm::Vector{Float32}
 end
 
@@ -114,6 +117,8 @@ Base.getindex(db::RaBitQ_Queries, i::Int) = RaBitQ_QueryVector(view(db.Qinv, :, 
 
 function RaBitQ_Queries(db::RaBitQ_Database, Q::AbstractMatrix)
     rp = InvertibleRandomProjections(db.P, db.Pinv)
+    #out = Matrix{Float16}(undef, out_dim(rp), size(Q, 2))  # 1.5 times slower and queries mem is not a big problem
+    #Qinv = invtransform!(rp, out, Q)
     Qinv = invtransform(rp, Q)
     N = [norm32(c) for c in eachcol(Q)]
     RaBitQ_Queries(Qinv, N)
@@ -123,8 +128,6 @@ struct RaBitQ_Vector{VECU64}
     x_b::VECU64
     info::RaBitQ_VectorInfo
 end
-
-Base.getindex(db::RaBitQ_Database, i::Integer) = RaBitQ_Vector(view(db.matrix, :, i), db.info[i])
 
 function RaBitQ_bitencode_!(P::AbstractMatrix{Float32}, x_b::AbstractVector{UInt64}, o::AbstractVector{<:Number})
     dim = size(P, 2) # in_dim(Q)
@@ -145,7 +148,7 @@ end
 """
 RaBitQ_bitencode_matrix!(
     P::Matrix, Pinv::Matrix, m::Float32,
-    matrix::Matrix{UInt64},
+    sketches::Matrix{UInt64},
     X::Matrix{<:Number},
     info::Vector{RaBitQ_VectorInfo})
 
@@ -153,15 +156,15 @@ Internal function that transform dataset and computes all related information fo
 """
 function RaBitQ_bitencode_matrix!(
     P::AbstractMatrix, Pinv::AbstractMatrix, m::Float32,
-    matrix::AbstractMatrix{UInt64},
+    sketches::AbstractMatrix{UInt64},
     X::AbstractMatrix{<:Number},
     info::Vector{RaBitQ_VectorInfo})
 
     err_factor = Float32(1.9 / sqrt(size(P, 1) - 1))
-    n = size(matrix, 2)
+    n = size(sketches, 2)
 
     @batch minbatch = 4 per = thread for i in 1:n
-        x_b = view(matrix, :, i)
+        x_b = view(sketches, :, i)
         oraw = view(X, :, i)
         N = norm32(oraw)
         RaBitQ_bitencode_!(Pinv, x_b, oraw)
@@ -174,37 +177,48 @@ end
 
 """
     RaBitQ_bitencode!(
-        map::Matrix{Float32},
-        matrix::Matrix{UInt64},
-        db::Matrix{<:Number})
+        P::AbstractMatrix{Float32},
+        sketches::AbstractMatrix{UInt64},
+        db::AbstractMatrix{<:Number}
+    )
     
-Computes a binary sketches projecting `db` to a Binary Hamming space storing binary sketches into `matrix` 
+Computes a binary sketches projecting `db` to a Binary Hamming space storing binary sketches into `sketches` 
 """
 function RaBitQ_bitencode!(
-    map::AbstractMatrix{Float32},
-    matrix::AbstractMatrix{UInt64},
-    db::AbstractMatrix{<:Number})
-    n = size(matrix, 2)
+        P::AbstractMatrix{Float32},
+        sketches::AbstractMatrix{UInt64},
+        db::AbstractMatrix{<:Number}
+    )
+    n = size(sketches, 2)
 
     @batch minbatch = 4 per = thread for i in 1:n
-        x_b = view(matrix, :, i)
+        x_b = view(sketches, :, i)
         oraw = view(db, :, i)
-        RaBitQ_bitencode_!(map, x_b, oraw)
+        RaBitQ_bitencode_!(P, x_b, oraw)
     end
 
-    matrix
+    sketches
 end
 
+"""
+    RaBitQ_bitencode(
+        P::AbstractMatrix{Float32},
+        db::AbstractMatrix{<:Number}
+    ) -> Matrix{UInt64}
+
+Computes binary sketches for `db` to be able to use Hamming space. Returns a UInt64 matrix with the binary sketches.
+    
+"""
 function RaBitQ_bitencode(
-    map::AbstractMatrix{Float32},
-    db::AbstractMatrix{<:Number})
+        P::AbstractMatrix{Float32},
+        db::AbstractMatrix{<:Number}
+    )
     n = size(db, 2)
-    m = ceil(Int, size(map, 2) / 64)
-    matrix = Matrix{UInt64}(undef, m, n)
+    m = ceil(Int, size(P, 2) / 64)
+    sketches = Matrix{UInt64}(undef, m, n)
 
-    RaBitQ_bitencode!(map, matrix, db)
+    RaBitQ_bitencode!(P, sketches, db)
 end
-
 
 function RaBitQ_dot_confidence_interval(dot_ō_o, D)
     x = dot_ō_o^2
@@ -222,6 +236,11 @@ function RaBitQ_dot_with_bitencoded_vector(x_b::AbstractVector{UInt64}, p::Abstr
     d * m
 end
 
+"""
+    RaBitQ_dot_ō_o(P::AbstractMatrix{Float32}, m::Float32, x_b::AbstractVector{UInt64}, o::AbstractVector)::Float32
+
+Computes `dot(P * x̄, o)` note that `P * x̄` is computed online with P, m, and x_b
+"""
 function RaBitQ_dot_ō_o(P::AbstractMatrix{Float32}, m::Float32, x_b::AbstractVector{UInt64}, o::AbstractVector)::Float32
     dim = size(P, 1)  # original dimension
     d = 0.0f0
@@ -239,7 +258,6 @@ end
 function RaBitQ_dot_ō_qinv(m::Float32, x_b::AbstractVector{UInt64}, qinv::AbstractVector{Float32})::Float32
     d = 0.0f0
 
-    # this function do inline inv. projection of q in P^-1
     @inbounds @simd for i in eachindex(qinv)
         x_i = qinv[i]
         d += ifelse(_b64get(x_b, i), x_i, -x_i)
@@ -248,14 +266,123 @@ function RaBitQ_dot_ō_qinv(m::Float32, x_b::AbstractVector{UInt64}, qinv::Abst
     d * m
 end
 
+#= ALL OF THE FOLLOWING ARE SLOWER OR EQ THAN RaBitQ_dot_ō_qinv_v1 ==
+=====================================================================
+
+function RaBitQ_dot_ō_qinv_v2(m::Float32, x_b::AbstractVector{UInt64}, qinv::AbstractVector{Float32})::Float32
+    d = 0.0f0
+
+    n = length(x_b)
+    j = 1
+    @inbounds for i in 1:n-1
+        B = x_b[i]
+
+        @inbounds @simd for k in 0:63
+            b = B & (one(UInt64) << k)
+            x = qinv[j + k]
+            d += ifelse(zero(UInt64) === b, -x, x)
+        end
+
+        j += 64
+    end
+
+    B = x_b[n]
+
+    @simd for k in 0:length(qinv)-j-1
+        b = B & (one(UInt64) << k)
+        x = qinv[j + k]
+        d += ifelse(zero(UInt64) === b, -x, x)
+    end
+
+    d * m
+end
+
+const QINVMASK = Matrix{Float32}(undef, 8, 2^8)
+
+for i in 1:2^8
+    ib = UInt64(i - 1)
+    for j in 1:8
+        jb = one(UInt64) << (j-1) & ib
+        if jb === zero(UInt64)
+            QINVMASK[j, i] = Float16(-1f0)
+        else
+            QINVMASK[j, i] = Float16(1f0)
+        end
+    end
+end
+
+
+function RaBitQ_dot_ō_qinv_v3(m::Float32, x_b::AbstractVector{UInt64}, qinv::AbstractVector{Float32})::Float32
+    d = 0.0f0
+    n = length(x_b)
+    j = 1
+    for i in 1:n-1
+        B = x_b[i]
+        for _ in 1:8
+            b = Int(B & 0xff) + 1
+            v = view(QINVMASK, :, b)
+            d += dot32(v, view(qinv, j:j+7))
+            j += 8
+            B >>>= 8
+        end
+    end
+
+    @inbounds B = x_b[n]
+
+    @inbounds @simd for k in 0:length(qinv)-j-1
+        x = qinv[j + k]
+        b = B & (one(UInt64) << k)
+        d += ifelse(zero(UInt64) === b, -x, x)
+    end
+
+    d * m
+end
+
+function RaBitQ_dot_ō_qinv_v4(m::Float32, x_b::AbstractVector{UInt64}, qinv::AbstractVector{Float32})::Float32
+    @inbounds @simd for i in eachindex(qinv)
+        qinv[i] = ifelse(_b64get(x_b, i), qinv[i], -qinv[i])
+    end
+
+    d = sum(qinv) * m
+
+    @inbounds @simd for i in eachindex(qinv)
+        qinv[i] = ifelse(_b64get(x_b, i), qinv[i], -qinv[i])
+    end
+
+    d
+end =#
+
+#const RaBitQ_dot_ō_qinv = RaBitQ_dot_ō_qinv_v1
+
+"""
+    struct RaBitQ_CosineDistance <: SemiMetric
+        m::Float32
+    end
+
+A cosine distance estimator, intended to be used with `evaluate`
+
+"""
 struct RaBitQ_CosineDistance <: SemiMetric
     m::Float32
 end
 
+"""
+    struct RaBitQ_L2Distance <: SemiMetric
+        m::Float32
+    end
+
+An Euclidean distance estimator, intended to be used with `evaluate`
+
+"""
 struct RaBitQ_L2Distance <: SemiMetric
     m::Float32
 end
 
+"""
+    RaBitQ_estimate_dot(m::Float32, o::RaBitQ_Vector, q::RaBitQ_QueryVector)::Float32
+
+Estimates the dot product with the given `m` value (`m=1/sqrt(dim)`)
+"""
 function RaBitQ_estimate_dot(m::Float32, o::RaBitQ_Vector, q::RaBitQ_QueryVector)::Float32
     RaBitQ_dot_ō_qinv(m, o.x_b, q.qinv) / o.info.dot_ō_o # / q.norm
 end

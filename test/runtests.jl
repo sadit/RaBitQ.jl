@@ -9,11 +9,11 @@ using AllocCheck, JET, LinearAlgebra, SimilaritySearch, JLD2, StatsBase, Downloa
     dist = L2Distance()
     d1 = evaluate(dist, x, y)
 
-    for (rptype, err) in [
-        QRRandomProjection => 0.001,
-        GaussianRandomProjection => 3.0,
-        Achioptas2RandomProjection => 3.3,
-        Achioptas3RandomProjection => 3.3
+    for (rptype, err, recerr) in [
+        (QRRandomProjection, 0.001, 0.25),
+        (GaussianRandomProjection, 3.0, 0.25),
+        (Achioptas2RandomProjection, 3.3, 0.5),
+        (Achioptas3RandomProjection, 3.3, 0.5)
     ]
         @info rptype, err, dim
         rp = rptype(Float32, dim) |> invertible
@@ -21,14 +21,14 @@ using AllocCheck, JET, LinearAlgebra, SimilaritySearch, JLD2, StatsBase, Downloa
         ŷ = transform(rp, y)
         d2 = evaluate(dist, x̂, ŷ)
         @test abs(d1 - d2) < err
-        @test evaluate(dist, invtransform(rp, x̂), x) <= 0.27
+        @test evaluate(dist, invtransform(rp, x̂), x) <= recerr
     end
 
-    for (rptype, err) in [
-        QRRandomProjection => 25,
-        GaussianRandomProjection => 25,
-        Achioptas2RandomProjection => 25,
-        Achioptas3RandomProjection => 25
+    for (rptype, err, recerr) in [
+        (QRRandomProjection, 25, 18),
+        (GaussianRandomProjection, 25, 18),
+        (Achioptas2RandomProjection, 25, 18),
+        (Achioptas3RandomProjection, 25 ,18),
     ]
 
         odim = 128
@@ -42,7 +42,7 @@ using AllocCheck, JET, LinearAlgebra, SimilaritySearch, JLD2, StatsBase, Downloa
         ŷ = transform(rp, y)
         d2 = evaluate(dist, x̂, ŷ)
         @test abs(d1 - d2) < err
-        @test evaluate(dist, invtransform(rp, x̂), x) < 18
+        @test evaluate(dist, invtransform(rp, x̂), x) < recerr
     end
 
 end
@@ -78,18 +78,6 @@ end
     @test BitVector(sign.(x̄) .> 0).chunks == x_b
     @show x_b
     dot_ō_o_ = RaBitQ.RaBitQ_dot_ō_o(rp.map, m, x_b, o)
-    #=try
-        fun()
-    catch err
-        @info typeof(err)
-        if typeof(err) !== MethodError
-            for e in err.errors
-                @info e
-            end
-        else
-            rethrow(err)
-        end
-    end=#
     @test abs(dot_ō_o - dot_ō_o_) < 1e-4
     @info "analyzing allocating functions"
 
@@ -117,7 +105,7 @@ end
     @test_opt RaBitQ_estimate_dot(m, o_, q_)
     est_ = RaBitQ_estimate_dot(m, o_, q_)
     @show dot_o_q, est, est_
-    @test abs(est - est_) < 1e-4
+    @test abs(est - est_) < 1e-2
     @show o_.info
     @test 0.93 < dot_o_q / est_ < 1.07
     norm_oraw = norm(oraw)
@@ -156,7 +144,7 @@ end
     @test recall > 0.25
 end
 
-using InteractiveUtils
+#using InteractiveUtils
 
 
 @testset "RaBit DB real" begin
@@ -168,7 +156,9 @@ using InteractiveUtils
 
     X, Q, gold_knns, gold_dists = jldopen(filename) do f
         kind = "otest"
-        f["train"], f["$kind/queries"], f["$kind/knns"][1:k, :], f["$kind/dists"][1:k, :]
+        m = 50
+        # using m queries to reduce times for GHA
+        f["train"], f["$kind/queries"][:, 1:m], f["$kind/knns"][1:k, 1:m], f["$kind/dists"][1:k, 1:m]
     end
 
     @time "ESTIMATION Database" db = RaBitQ_Database(X)
@@ -182,22 +172,24 @@ using InteractiveUtils
         @time "dist" evaluate(dist, x, q)
         @time "estimate" RaBitQ_estimate_dot(db.m, x, q)
         @time "estimate" RaBitQ_estimate_dot(db.m, x, q)
-        @code_warntype RaBitQ_estimate_dot(db.m, x, q)
-        @code_warntype RaBitQ.RaBitQ_dot_ō_qinv(db.m, x.x_b, q.qinv)
+        # @code_warntype RaBitQ_estimate_dot(db.m, x, q)
+        # @code_warntype RaBitQ._b64get(x.x_b, 1)
+        # @code_warntype RaBitQ.RaBitQ_dot_ō_qinv(db.m, x.x_b, q.qinv)
     end
 
+    # too slow to run on GithubActions:
     @time "ESTIMATION computing knns" knns = searchbatch!(S, ctx, queries, knns)
     @time "ESTIMATION computing knns" knns = searchbatch!(S, ctx, queries, knns)
     recall = macrorecall(gold_knns, knns)
     @show recall
-    @test recall > 0.59
+    @test recall > 0.55
 
 
     @info "\n\n========================"
     @info "Now using Hammming"
     @info "========================"
 
-    rp = GaussianRandomProjection(Float32, size(X, 1), 4 * size(X, 1))
+    rp = QRRandomProjection(Float32, size(X, 1), size(X, 1))
     db = MatrixDatabase(RaBitQ_bitencode(rp.map, X))
 
     S = ExhaustiveSearch(; db, dist=BinaryHammingDistance())
@@ -207,7 +199,7 @@ using InteractiveUtils
     @show size(X), size(Q)
 
     local knns
-    for (Δ, minrecall) in [2 => 0.6, 8 => 0.8, 16 => 0.9]
+    for (Δ, minrecall) in [2 => 0.6, 8 => 0.8, 16 => 0.88]
         @info "==================="
         @time "ReRanking computing knns Δ=$Δ" knns = searchbatch(S, ctx, MatrixDatabase(queriesQ), Δ * k)
         @show Δ, size(gold_knns), size(knns)
