@@ -121,10 +121,6 @@ function transform!(rp::AbstractRandomProjections, O::AbstractMatrix, X::Abstrac
 end
 
 function invtransform!(rp::InvertibleRandomProjections, out::AbstractVector, v::AbstractVector)
-    #@assert out_dir(rp) == length(out) && in_dir(rp) == length(v)
-    # @show size(out) size(rp.inv) size(v)
-    #mul!(out, rp.inv, v)
-
     for (i, x) in enumerate(eachcol(rp.inv))
         @inbounds out[i] = dot32(x, v)
     end
