@@ -81,7 +81,7 @@ function RaBitQ_Database(X::Matrix{<:Number})
     dim, n = size(X)
     sketches = Matrix{UInt64}(undef, dim64(dim), n)
     info = Vector{RaBitQ_VectorInfo}(undef, n)
-    Q = invertible(QRRandomProjection(Float32, dim))
+    Q = invertible(QRRandomProjection(dim))
     m = Float32(1 / sqrt(dim))
 
     RaBitQ_bitencode_matrix!(Q.map, Q.inv, m, sketches, X, info)
@@ -203,21 +203,21 @@ end
 """
     RaBitQ_bitencode(
         P::AbstractMatrix{Float32},
-        db::AbstractMatrix{<:Number}
+        X::AbstractMatrix{<:Number}
     ) -> Matrix{UInt64}
 
-Computes binary sketches for `db` to be able to use Hamming space. Returns a UInt64 matrix with the binary sketches.
+Computes binary sketches for `X` to be able to use Hamming space. Returns a UInt64 matrix with the binary sketches.
     
 """
 function RaBitQ_bitencode(
         P::AbstractMatrix{Float32},
-        db::AbstractMatrix{<:Number}
+        X::AbstractMatrix{<:Number}
     )
-    n = size(db, 2)
+    n = size(X, 2)
     m = ceil(Int, size(P, 2) / 64)
     sketches = Matrix{UInt64}(undef, m, n)
 
-    RaBitQ_bitencode!(P, sketches, db)
+    RaBitQ_bitencode!(P, sketches, X)
 end
 
 function RaBitQ_dot_confidence_interval(dot_ō_o, D)

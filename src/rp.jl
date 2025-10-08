@@ -1,6 +1,6 @@
-using Polyester, Random, LinearAlgebra, Distributions
-export AbstractRandomProjections, InvertibleRandomProjections, RandomProjections, invertible, invertible
-export GaussianRandomProjection, QRRandomProjection, Achioptas3RandomProjection, Achioptas2RandomProjection
+using Polyester, Random, LinearAlgebra, Distributions, SimilaritySearch, StatsBase
+export AbstractRandomProjections, InvertibleRandomProjections, RandomProjections, invertible, refine
+export GaussianRandomProjection, QRRandomProjection, QRXRandomProjection, Achlioptas3RandomProjection, Achlioptas2RandomProjection
 export out_dim, in_dim, transform, transform!, invtransform, invtransform!
 
 abstract type AbstractRandomProjections end
@@ -25,11 +25,22 @@ function invertible(rp::RandomProjections)
     end
 end
 
-function GaussianRandomProjection(FloatType, in_dim::Int, out_dim::Int=in_dim)
-    #(in_dim, out_dim) = map_dims
-    N = Normal(zero(FloatType), FloatType(1 / out_dim))
-    M = rand(N, in_dim, out_dim)
+struct OrthoDistance <: SemiMetric end
+SimilaritySearch.evaluate(::OrthoDistance, u, v) = 1f0 - abs(dot32(u, v))
 
+function refine(rp::RandomProjections, out_dim::Int; start::Int=1, verbose::Bool=true)
+    C = fft(OrthoDistance(), MatrixDatabase(rp.map), out_dim; start, verbose)
+    @show C.dmax, quantile(C.dists, 0.0:0.25:1.0)
+    RandomProjections(rp.map[:, C.centers])
+end
+
+function Base.hcat(rp1::RandomProjections, rp2::RandomProjections)
+    RandomProjections(hcat(rp1.map, rp2.map))
+end
+
+function GaussianRandomProjection(rng::AbstractRNG, FloatType::Type, in_dim::Int, out_dim::Int)
+    N = Normal(zero(FloatType), convert(FloatType, 1 / out_dim))
+    M = rand(rng, N, in_dim, out_dim)
     for c in eachcol(M)
         normalize!(c)
     end
@@ -37,9 +48,8 @@ function GaussianRandomProjection(FloatType, in_dim::Int, out_dim::Int=in_dim)
     RandomProjections(M)
 end
 
-function QRRandomProjection(FloatType, in_dim::Int, out_dim::Int=in_dim; seed::Int=0)
-    rng = Xoshiro(seed)
-    M, _ = qr(rand(rng, FloatType, (in_dim, out_dim)))
+function QRRandomProjection(rng::AbstractRNG, FloatType::Type, in_dim::Int, out_dim::Int)
+    M, _ = qr(rand(rng, FloatType, (in_dim, in_dim)))
     M = Matrix(M)
 
     if in_dim != out_dim
@@ -49,10 +59,15 @@ function QRRandomProjection(FloatType, in_dim::Int, out_dim::Int=in_dim; seed::I
     end
 end
 
-function Achioptas2RandomProjection(FloatType, in_dim::Int, out_dim::Int=in_dim; seed::Int=0)
-    rng = Xoshiro(seed)
-    M = Matrix{FloatType}(undef, in_dim, out_dim)
+function QRXRandomProjection(rng::AbstractRNG, FloatType::Type, in_dim::Int, out_dim::Int; factor::Int=3)
+    rp0 = QRRandomProjection(rng, FloatType, in_dim, in_dim)
+    rp = GaussianRandomProjection(rng, FloatType, in_dim, factor * out_dim)
+    rp = hcat(rp0, rp)
+    refine(rp, out_dim)
+end
 
+function Achlioptas2RandomProjection(rng::AbstractRNG, FloatType::Type, in_dim::Int, out_dim::Int)
+    M = Matrix{FloatType}(undef, in_dim, out_dim)
     v = FloatType(sqrt(1 / out_dim))
 
     for i in CartesianIndices(M)
@@ -66,10 +81,8 @@ function Achioptas2RandomProjection(FloatType, in_dim::Int, out_dim::Int=in_dim;
     RandomProjections(M)
 end
 
-function Achioptas3RandomProjection(FloatType, in_dim::Int, out_dim::Int=in_dim; seed::Int=0)
-    rng = Xoshiro(seed)
+function Achlioptas3RandomProjection(rng::AbstractRNG, FloatType::Type, in_dim::Int, out_dim::Int)
     M = Matrix{FloatType}(undef, in_dim, out_dim)
-
     v = FloatType(sqrt(3 / out_dim))
 
     for i in CartesianIndices(M)
@@ -84,6 +97,12 @@ function Achioptas3RandomProjection(FloatType, in_dim::Int, out_dim::Int=in_dim;
 
     RandomProjections(M)
 end
+
+GaussianRandomProjection(in_dim::Int, out_dim::Int=in_dim) = GaussianRandomProjection(Xoshiro(0), Float32, in_dim, out_dim)
+QRRandomProjection(in_dim::Int, out_dim::Int=in_dim) = QRRandomProjection(Xoshiro(0), Float32, in_dim, out_dim)
+QRXRandomProjection(in_dim::Int, out_dim::Int; factor::Int=3) = QRXRandomProjection(Xoshiro(0), Float32, in_dim, out_dim; factor)
+Achlioptas2RandomProjection(in_dim::Int, out_dim::Int=in_dim) = Achlioptas2RandomProjection(Xoshiro(0), Float32, in_dim, out_dim)
+Achlioptas3RandomProjection(in_dim::Int, out_dim::Int=in_dim) = Achlioptas3RandomProjection(Xoshiro(0), Float32, in_dim, out_dim)
 
 Base.size(rp::AbstractRandomProjections) = size(getmap(rp))
 in_dim(rp::AbstractRandomProjections) = size(getmap(rp), 1)

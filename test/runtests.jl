@@ -12,11 +12,11 @@ using AllocCheck, JET, LinearAlgebra, SimilaritySearch, JLD2, StatsBase, Downloa
     for (rptype, err, recerr) in [
         (QRRandomProjection, 0.001, 0.25),
         (GaussianRandomProjection, 3.0, 0.25),
-        (Achioptas2RandomProjection, 3.3, 0.5),
-        (Achioptas3RandomProjection, 3.3, 0.5)
+        (Achlioptas2RandomProjection, 3.3, 0.5),
+        (Achlioptas3RandomProjection, 3.3, 0.5)
     ]
         @info rptype, err, dim
-        rp = rptype(Float32, dim) |> invertible
+        rp = rptype(dim) |> invertible
         x̂ = transform(rp, x)
         ŷ = transform(rp, y)
         d2 = evaluate(dist, x̂, ŷ)
@@ -27,13 +27,13 @@ using AllocCheck, JET, LinearAlgebra, SimilaritySearch, JLD2, StatsBase, Downloa
     for (rptype, err, recerr) in [
         (QRRandomProjection, 25, 18),
         (GaussianRandomProjection, 25, 18),
-        (Achioptas2RandomProjection, 25, 18),
-        (Achioptas3RandomProjection, 25 ,18),
+        (Achlioptas2RandomProjection, 25, 18),
+        (Achlioptas3RandomProjection, 25 ,18),
     ]
 
         odim = 128
         @info rptype, err, odim
-        rp = rptype(Float32, dim, odim) |> invertible
+        rp = rptype(dim, odim) |> invertible
         @show size(rp)
 
         @test in_dim(rp) == dim
@@ -50,7 +50,7 @@ end
 @testset "RaBitQ" begin
     # Write your tests here.
     dim = 384
-    rp = invertible(QRRandomProjection(Float32, dim))
+    rp = invertible(QRRandomProjection(dim))
     oraw = rand(-1.0f0:1.0f-9:1.0f0, dim)
     o = normalize(oraw)
     qraw = rand(-1.0f0:1.0f-9:1.0f0, dim)
@@ -189,7 +189,7 @@ end
     @info "Now using Hammming"
     @info "========================"
 
-    rp = QRRandomProjection(Float32, size(X, 1), size(X, 1))
+    rp = QRRandomProjection(size(X, 1), size(X, 1))
     db = MatrixDatabase(RaBitQ_bitencode(rp.map, X))
 
     S = ExhaustiveSearch(; db, dist=BinaryHammingDistance())
