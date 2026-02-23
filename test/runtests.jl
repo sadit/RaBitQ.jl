@@ -58,8 +58,6 @@ end
     q = normalize(qraw)
 
     m = Float32(1 / sqrt(dim))
-    #ō = transform(rp, [ifelse(x >= 0, m, -m) for x in o])
-    #p
     x̄ = Float32[ifelse(x >= 0, m, -m) for x in invtransform(rp, o)]
     ō = transform(rp, x̄)
     dot_o_q = dot(o, q)
@@ -189,19 +187,19 @@ end
     @info "Now using Hammming"
     @info "========================"
 
-    rp = QRRandomProjection(size(X, 1), size(X, 1))
-    db = MatrixDatabase(RaBitQ_bitencode(rp.map, X))
+    H = RaBitQ_HammingEncoder(size(X, 1))
+    db = MatrixDatabase(transform(H, X))
 
     S = ExhaustiveSearch(; db, dist=BinaryHammingDistance())
     ctx = getcontext(S)
 
-    queriesQ = MatrixDatabase(RaBitQ_bitencode(rp.map, Q))
+    queries = MatrixDatabase(transform(H, Q))
     @show size(X), size(Q)
 
     local knns
     for (Δ, minrecall) in [2 => 0.6, 8 => 0.8, 16 => 0.88]
         @info "==================="
-        @time "ReRanking computing knns Δ=$Δ" knns = searchbatch(S, ctx, MatrixDatabase(queriesQ), Δ * k)
+        @time "ReRanking computing knns Δ=$Δ" knns = searchbatch(S, ctx, queries, Δ * k)
         @show Δ, size(gold_knns), size(knns)
         recall = macrorecall(Set.(eachcol(gold_knns)), Set.(IdView.(eachcol(knns))))
         @show Δ, recall

@@ -1,11 +1,11 @@
 module RaBitQ
+
 using LinearAlgebra
 using SimilaritySearch
 export RaBitQ_estimate_dot, RaBitQ_estimate_l2
 export RaBitQ_Database, RaBitQ_Vector, RaBitQ_VectorInfo, RaBitQ_Queries, RaBitQ_QueryVector, RaBitQ_CosineDistance, RaBitQ_L2Distance, RaBitQ_rerank_cosine!
-export RaBitQ_bitencode!, RaBitQ_bitencode, dim64
+export RaBitQ_HammingEncoder, dim64
 
-using AllocCheck
 function dot32(p::AbstractVector{<:Number}, o::AbstractVector{<:Number})::Float32
     d = 0.0f0
     @inbounds @simd for i in eachindex(p)
@@ -173,51 +173,6 @@ function RaBitQ_bitencode_matrix!(
         err = sqrt((1.0f0 - x) / x) * err_factor  # sim. RaBitQ_dot_confidence_interval
         info[i] = RaBitQ_VectorInfo(dot_ō_o, N, err)
     end
-end
-
-"""
-    RaBitQ_bitencode!(
-        P::AbstractMatrix{Float32},
-        sketches::AbstractMatrix{UInt64},
-        db::AbstractMatrix{<:Number}
-    )
-    
-Computes a binary sketches projecting `db` to a Binary Hamming space storing binary sketches into `sketches` 
-"""
-function RaBitQ_bitencode!(
-        P::AbstractMatrix{Float32},
-        sketches::AbstractMatrix{UInt64},
-        db::AbstractMatrix{<:Number}
-    )
-    n = size(sketches, 2)
-
-    @batch minbatch = 4 per = thread for i in 1:n
-        x_b = view(sketches, :, i)
-        oraw = view(db, :, i)
-        RaBitQ_bitencode_!(P, x_b, oraw)
-    end
-
-    sketches
-end
-
-"""
-    RaBitQ_bitencode(
-        P::AbstractMatrix{Float32},
-        X::AbstractMatrix{<:Number}
-    ) -> Matrix{UInt64}
-
-Computes binary sketches for `X` to be able to use Hamming space. Returns a UInt64 matrix with the binary sketches.
-    
-"""
-function RaBitQ_bitencode(
-        P::AbstractMatrix{Float32},
-        X::AbstractMatrix{<:Number}
-    )
-    n = size(X, 2)
-    m = ceil(Int, size(P, 2) / 64)
-    sketches = Matrix{UInt64}(undef, m, n)
-
-    RaBitQ_bitencode!(P, sketches, X)
 end
 
 function RaBitQ_dot_confidence_interval(dot_ō_o, D)
@@ -401,6 +356,64 @@ function SimilaritySearch.evaluate(dist::RaBitQ_L2Distance, o::RaBitQ_Vector, q:
     sqrt(o.info.norm^2 + q.norm^2 - 2 * o.info.norm * q.norm * dot_o_q)
 end
 
-SimilaritySearch.evaluate(dist::RaBitQ_L2Distance, a::AbstractVector, b::RaBitQ_Vector) = evaluate(dist, b, a)s
+SimilaritySearch.evaluate(dist::RaBitQ_L2Distance, a::AbstractVector, b::RaBitQ_Vector) = evaluate(dist, b, a)
+
+#====================================#
+
+"""
+    RaBitQ_HammingEncode!(
+        P::AbstractMatrix{Float32},
+        sketches::AbstractMatrix{UInt64},
+        db::AbstractMatrix{<:Number}
+    )
+    
+Computes a binary sketches projecting `db` to a Binary Hamming space storing binary sketches into `sketches` 
+"""
+function RaBitQ_HammingEncode!(
+        P::AbstractMatrix{Float32},
+        sketches::AbstractMatrix{UInt64},
+        db::AbstractMatrix{<:Number}
+    )
+    n = size(sketches, 2)
+
+    @batch minbatch = 4 per = thread for i in 1:n
+        x_b = view(sketches, :, i)
+        oraw = view(db, :, i)
+        RaBitQ_bitencode_!(P, x_b, oraw)        
+    end
+
+    sketches
+end
+
+struct RaBitQ_HammingEncoder{MatrixType<:AbstractMatrix}
+    P::MatrixType
+end
+
+"""
+    RaBitQ_HammingEncoder(P::AbstractMatrix)
+    RaBitQ_HammingEncoder(rp::RandomProjections)
+    RaBitQ_HammingEncoder(in_dim::Int, out_dim::Int=2in_dim)
+
+Creates a Hamming encoder based on the `P` linear transformation (use a RandomProjection)
+"""
+RaBitQ_HammingEncoder(rp::RandomProjections) = RaBitQ_HammingEncoder(getmap(rp))
+RaBitQ_HammingEncoder(in_dim::Int, out_dim::Int=2in_dim) = RaBitQ_HammingEncoder(QRXRandomProjection(in_dim, out_dim))
+
+"""
+    transform!(H::RaBitQ_HammingEncoder, sketches::AbstractMatrix{UInt64}, X::AbstractMatrix{<:Number})
+    transform(H::RaBitQ_HammingEncoder, X::AbstractMatrix{<:Number})
+
+Computes binary sketches for `X` to be able to use Hamming space. Returns a UInt64 matrix with the binary sketches.
+"""
+function transform!(H::RaBitQ_HammingEncoder, sketches::AbstractMatrix{UInt64}, X::AbstractMatrix{<:Number})
+    RaBitQ_HammingEncode!(H.P, sketches, X)
+end
+
+function transform(H::RaBitQ_HammingEncoder, X::AbstractMatrix{<:Number})
+    n = size(X, 2)
+    m = dim64(size(H.P, 2))
+    sketches = Matrix{UInt64}(undef, m, n)
+    transform!(H, sketches, X)
+end
 
 end
